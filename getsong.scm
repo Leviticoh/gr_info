@@ -1,7 +1,7 @@
 #!/usr/bin/env -S guile --no-auto-compile -s
 !#
 
-(use-modules (web client) (ice-9 textual-ports))
+(use-modules (web client) (ice-9 textual-ports) (ice-9 pretty-print))
 
 (define (text-dl uri) (call-with-values (lambda () (http-get uri)) (lambda (a b) b)))
 
@@ -39,7 +39,7 @@
 
 (define (json-string testo)
   (list->string (reverse (_json-string_ '() (cdr (string->list testo))))))
-
+#!
 (define (json-value testo)
   (cond
     ((char=? (string-ref testo 0) #\")
@@ -50,7 +50,7 @@
      (json-number testo))
     ((char-set-contains? (char-set #\t #\f #\n) (string-ref testo 0))
      (json-atom testo))))
-
+!#
 (define (_json-trim-name_ testo)
   (cond
 
@@ -68,14 +68,23 @@
 (define (json-trim-name testo)
   (_json-trim-name_ (string-drop testo 1)))
 
-
+#!
 
 (define (json-element testo)
   (cons
     (json-string testo)
     (json-value (json-trim-name testo))))
 
+!#
 
+(define (json-element testo)
+  (define coda (json-trim-name testo))
+  (cons
+    (json-string testo)
+    (cond ((char=? (string-ref coda 0) #\{) (json-object coda))
+	  (else (string-trim-right (substring coda 0 (- (string-length coda)
+				     (string-length (json-trim-element testo))))
+				   (char-set-adjoin json-whitespace #\,))))))
 
 (define (_json-trim-element_ escap paren testo)
   (cond
@@ -84,7 +93,7 @@
 	  (= paren 0)
 	  (or (char=? (string-ref testo 0) #\,)
 	      (char=? (string-ref testo 0) #\})))
-     (string-trim (string-drop testo 1) json-whitespace))
+     (string-trim testo (char-set-adjoin json-whitespace #\,)))
 
     ((and (= escap 0)
 	  (char=? (string-ref testo 0) #\{))
@@ -128,6 +137,7 @@
 
 (define (_json-object_ testo)
   (cond
+    ((string-null? testo) '())
     ((char=? (string-ref testo 0) #\}) '())
     (else (cons (json-element testo) (_json-object_ (json-trim-element testo))))))
 
@@ -139,3 +149,5 @@
 
 
 (define json-parse json-object)
+
+(pretty-print (json-parse (text-dl "https://gensokyoradio.net/api/station/playing/")))
