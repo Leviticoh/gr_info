@@ -1,4 +1,4 @@
-#!/usr/bin/env -S guile --no-auto-compile -s
+#!/usr/bin/env -S guile -s
 !#
 
 (use-modules (web client) (ice-9 textual-ports) (ice-9 pretty-print) (rnrs bytevectors))
@@ -8,7 +8,7 @@
 (define json-whitespace (char-set #\space #\tab #\newline #\return))
 
 (define (json-unicode testo)
-  (integer->char (+ (* (car testo)))))
+  (string->number (string (car testo) (cadr testo) (caddr testo) (cadddr testo)) 16))
 
 (define (_json-string_ accum testo)
   (cond
@@ -37,8 +37,41 @@
 				      (_json-string_ (cons (car testo) accum) (cdr testo)))))
     (else (_json-string_ (cons (car testo) accum) (cdr testo)))))
 
+(define (json-unicode-resolve-surrogates accum testo)
+  (cond
+    ((null? testo)
+     accum)
+
+    ((char? (car testo))
+     (json-unicode-resolve-surrogates (cons (car testo) accum) (cdr testo)))
+
+    ((>= (car testo) #xD800)
+     (json-unicode-resolve-surrogates (cons (integer->char (+ #x10000
+							      (- (car testo)
+								 #xD800)
+							      (- (cadr testo)
+								 #xDC00)))
+					    accum) (cddr testo)))
+
+    (else
+      (json-unicode-resolve-surrogates (cons (integer->char (car testo))
+					     accum) (cdr testo)))))
+
 (define (json-string testo)
-  (list->string (reverse (_json-string_ '() (cdr (string->list testo))))))
+  (list->string (json-unicode-resolve-surrogates '() (_json-string_ '() (cdr (string->list testo))))))
+
+(define (_json-array_ testo)
+  (cond
+    ((char=? (string-ref testo 0)
+	     #\])
+     '())
+
+    (else
+      (cons (json-value testo)
+	    (_json-array_ (json-trim-value testo))))))
+
+(define (json-array testo)
+  (_json-array_ (string-trim testo (char-set-adjoin json-whitespace #\[))))
 
 (define (json-atom testo)
   (cond
@@ -65,11 +98,13 @@
      (json-string testo))
     ((char=? (string-ref testo 0) #\{)
      (json-object testo))
+    ((char=? (string-ref testo 0) #\[)
+     (json-array testo))
     ((char-set-contains? (char-set #\t #\f #\n) (string-ref testo 0))
      (json-atom testo))
     (else
       (string-trim-right (substring testo 0 (- (string-length testo)
-					       (string-length (json-trim-element testo))))
+					       (string-length (json-trim-value testo))))
 			 (char-set-adjoin json-whitespace #\,)))))
 
 (define (_json-trim-name_ testo)
@@ -96,52 +131,86 @@
     (json-value (json-trim-name testo))))
 
 
-(define (_json-trim-element_ escap paren testo)
+
+(define (_json-trim-string_ testo)
   (cond
+    ((char=? (string-ref testo 0)
+	     #\")
+     (string-drop testo 1))
 
-    ((and (= escap 0)
-	  (= paren 0)
-	  (or (char=? (string-ref testo 0) #\,)
-	      (char=? (string-ref testo 0) #\})))
-     (string-trim testo (char-set-adjoin json-whitespace #\,)))
-
-    ((and (= escap 0)
-	  (char=? (string-ref testo 0) #\{))
-     (_json-trim-element_ 0 (+ paren 1) (string-trim
-					  testo
-					  (char-set-delete char-set:full #\} #\"))))
-
-    ((and (= escap 0)
-	  (> paren 0)
-	  (char=? (string-ref testo 0) #\}))
-     (_json-trim-element_ 0 (+ paren -1) (string-trim
-					   (string-drop testo 1)
-					   json-whitespace)))
-
-    ((and (= escap 0)
-	  (char=? (string-ref testo 0) #\"))
-     (_json-trim-element_ 1 paren (string-trim
-				    (string-drop testo 1)
-				    (char-set-delete char-set:full #\" #\\))))
-    
-    ((and (= escap 1)
-	  (char=? (string-ref testo 0) #\"))
-     (_json-trim-element_ 0 paren (string-drop testo 1)))
-
-    ((and (= escap 1)
-	  (char=? (string-ref testo 0) #\\))
-     (_json-trim-element_ 2 paren (string-drop testo 1)))
-
-    ((and (= escap 2))
-     (_json-trim-element_ 1 paren (string-drop testo 1)))
+    ((char=? (string-ref testo 0)
+	     #\\)
+     (_json-trim-string_ (string-drop testo 2)))
 
     (else
-      (_json-trim-element_ escap paren (string-drop testo 1)))))
+      (_json-trim-string_ (string-trim testo (char-set-delete char-set:full #\\ #\"))))))
+
+(define (json-trim-string testo)
+  (_json-trim-string_ (string-drop testo 1)))
 
 
+
+
+(define (_json-trim-object_ testo)
+  (cond
+    ((char=? (string-ref testo 0)
+	     #\})
+     (string-drop testo 1))
+
+    (else
+      (_json-trim-object_ (json-trim-element testo)))))
+
+(define (json-trim-object testo)
+  (_json-trim-object_ (string-trim (string-drop testo 1) json-whitespace)))
+
+
+(define (_json-trim-array_ testo)
+  (cond
+    ((char=? (string-ref testo 0)
+	     #\])
+     (string-drop testo 1))
+
+    (else
+      (_json-trim-array_ (json-trim-value testo)))))
+
+(define (json-trim-array testo)
+  (_json-trim-array_ (string-trim (string-drop testo 1) json-whitespace)))
+
+
+(define (json-trim-gen testo)
+  (string-trim (string-trim testo
+			    (char-set-delete char-set:full
+					     #\,
+					     #\]
+					     #\}))
+	       (char-set-adjoin json-whitespace
+				#\,)))
+
+
+(define (json-trim-value testo)
+  (cond
+    ((char=? (string-ref testo 0)
+	     #\")
+     (string-trim (json-trim-string testo)
+		  (char-set-adjoin json-whitespace #\,)))
+
+    ((char=? (string-ref testo 0)
+	     #\{)
+     (string-trim (json-trim-object testo)
+		  (char-set-adjoin json-whitespace #\,)))
+
+    ((char=? (string-ref testo 0)
+	     #\[)
+     (string-trim (json-trim-array testo)
+		  (char-set-adjoin json-whitespace #\,)))
+
+    (else
+      (string-trim (json-trim-gen testo)
+		   (char-set-adjoin json-whitespace #\,)))))
 
 (define (json-trim-element testo)
-  (_json-trim-element_ 0 0 testo))
+  (json-trim-value (string-trim (json-trim-string (string-trim testo json-whitespace))
+		(char-set-adjoin json-whitespace #\:))))
 
 
 
@@ -158,12 +227,7 @@
 
 
 
-(define json-parse json-object)
+(define json-parse json-value)
 
-(pretty-print (json-parse (text-dl "https://gensokyoradio.net/api/station/playing/")))
-#!
-(pretty-print (json-parse (get-string-all (current-input-port))))
-!#
-#!
-(pretty-print (json-parse (text-dl (get-line (current-input-port)))))
-!#
+
+((pretty-print (json-parse (text-dl "https://gensokyoradio.net/api/station/playing/"))))
