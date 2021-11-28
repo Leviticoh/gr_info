@@ -230,4 +230,4 @@
 (define json-parse json-value)
 
 
-((pretty-print (json-parse (text-dl "https://gensokyoradio.net/api/station/playing/"))))
+(pretty-print (json-parse (text-dl "https://gensokyoradio.net/api/station/playing/")))
